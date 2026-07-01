@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:padding="20dp">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="车辆信息"
+        android:textSize="20sp"
+        android:textColor="#333333"
+        android:textStyle="bold"
+        android:layout_marginBottom="16dp" />
+
+    <!-- 车牌号 -->
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="车牌号"
+        android:textSize="14sp"
+        android:textColor="#666666"
+        android:layout_marginBottom="4dp" />
+    <EditText
+        android:id="@+id/et_plate_number"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="例如：京A12345"
+        android:padding="10dp"
+        android:background="@android:drawable/editbox_background"
+        android:layout_marginBottom="12dp"
+        android:inputType="text" />
+
+    <!-- 车主姓名 -->
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="车主姓名"
+        android:textSize="14sp"
+        android:textColor="#666666"
+        android:layout_marginBottom="4dp" />
+    <EditText
+        android:id="@+id/et_owner_name"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="请输入车主姓名"
+        android:padding="10dp"
+        android:background="@android:drawable/editbox_background"
+        android:layout_marginBottom="12dp"
+        android:inputType="textPersonName" />
+
+    <!-- 是否内部车 -->
+    <CheckBox
+        android:id="@+id/cb_is_internal"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="内部车辆"
+        android:textSize="15sp"
+        android:layout_marginBottom="12dp" />
+
+    <!-- 备注 -->
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="备注"
+        android:textSize="14sp"
+        android:textColor="#666666"
+        android:layout_marginBottom="4dp" />
+    <EditText
+        android:id="@+id/et_remark"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="选填备注信息"
+        android:padding="10dp"
+        android:background="@android:drawable/editbox_background"
+        android:inputType="textMultiLine"
+        android:minLines="2" />
+
+</LinearLayout>
