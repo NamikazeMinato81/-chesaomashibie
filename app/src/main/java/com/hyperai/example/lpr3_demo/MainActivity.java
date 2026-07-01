@@ -4,7 +4,9 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.Context;
+import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
@@ -16,6 +18,7 @@ import android.view.View;
 import android.widget.Button;
 import android.widget.ImageView;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import com.bumptech.glide.Glide;
 import com.hyperai.hyperlpr3.HyperLPR3;
@@ -41,6 +44,9 @@ public class MainActivity extends AppCompatActivity {
     private ImageView imageView;
 
     private TextView mResult;
+
+    /** 数据库访问对象 */
+    private VehicleDao vehicleDao;
 
 
     private static final int REQUEST_EXTERNAL_STORAGE = 1;
@@ -77,6 +83,9 @@ public class MainActivity extends AppCompatActivity {
         imageView = findViewById(R.id.imageView);
         mResult = findViewById(R.id.mResult);
 
+        // 初始化 Room 数据库 DAO
+        vehicleDao = AppDatabase.getInstance(this).vehicleDao();
+
         verifyStoragePermissions(this);
 
         // 车牌识别算法配置参数
@@ -112,9 +121,9 @@ public class MainActivity extends AppCompatActivity {
                         .multiSelect(false)
                         // 是否记住上次选中记录, 仅当multiSelect为true的时候配置，默认为true
                         .rememberSelected(false)
-                        // “确定”按钮背景色
+                        // "确定"按钮背景色
                         .btnBgColor(Color.GRAY)
-                        // “确定”按钮文字颜色
+                        // "确定"按钮文字颜色
                         .btnTextColor(Color.BLUE)
                         // 使用沉浸式状态栏
                         .statusBarColor(Color.parseColor("#3F51B5"))
@@ -140,7 +149,7 @@ public class MainActivity extends AppCompatActivity {
             }
         });
 
-        // ===== 新增：白名单管理按钮 =====
+        // ===== 白名单管理按钮 =====
         manageBtn.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
@@ -172,6 +181,16 @@ public class MainActivity extends AppCompatActivity {
             imageView.setImageBitmap(bitmap);
             // 调用车牌识别
             Plate[] plates =  HyperLPR3.getInstance().plateRecognition(bitmap, HyperLPR3.CAMERA_ROTATION_0, HyperLPR3.STREAM_BGRA);
+
+            // ===== 判断是否识别到车牌 =====
+            if (plates == null || plates.length == 0) {
+                // 未检测到车牌
+                Toast.makeText(MainActivity.this,
+                        "未检测到有效车牌，请重新选择清晰的照片", Toast.LENGTH_LONG).show();
+                mResult.setText("未识别到车牌");
+                return;
+            }
+
             for (Plate plate: plates) {
                 String type = "未知车牌";
                 if (plate.getType() != HyperLPR3.PLATE_TYPE_UNKNOWN) {
@@ -181,7 +200,81 @@ public class MainActivity extends AppCompatActivity {
                 showText += pStr;
                 mResult.setText(showText);
 
+                // ===== 相册识别结果也走数据库白名单比对 =====
+                String plateCode = plate.getCode();
+                if (plateCode != null && !plateCode.isEmpty()) {
+                    queryVehicleAndShowDialog(plateCode);
+                }
             }
+        }
+    }
+
+    /**
+     * ===== 查询数据库并根据结果弹窗（与 CameraActivity 逻辑一致） =====
+     * @param plateCode 识别的车牌号
+     */
+    private void queryVehicleAndShowDialog(String plateCode) {
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                Vehicle vehicle = vehicleDao.getVehicleByPlate(plateCode);
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        showVehicleDialog(plateCode, vehicle);
+                    }
+                });
+            }
+        }).start();
+    }
+
+    /**
+     * 显示车辆识别结果弹窗
+     */
+    private void showVehicleDialog(String plateCode, Vehicle vehicle) {
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setCancelable(false);
+
+        if (vehicle != null && vehicle.isInternal()) {
+            // 内部车：绿色放行
+            String message = "车牌号：" + plateCode + "\n"
+                    + "车主：" + vehicle.getOwnerName() + "\n"
+                    + "类型：内部车辆\n"
+                    + "备注：" + (vehicle.getRemark() != null ? vehicle.getRemark() : "无");
+            builder.setTitle("✅ 放行")
+                    .setMessage(message)
+                    .setPositiveButton("确定", null);
+            AlertDialog dialog = builder.create();
+            dialog.setOnShowListener(new DialogInterface.OnShowListener() {
+                @Override
+                public void onShow(DialogInterface dialogInterface) {
+                    dialog.getWindow().getDecorView().setBackgroundColor(Color.parseColor("#CC4CAF50"));
+                }
+            });
+            dialog.show();
+        } else {
+            // 外来车辆：红色警告
+            String message;
+            if (vehicle != null && !vehicle.isInternal()) {
+                message = "车牌号：" + plateCode + "\n"
+                        + "车主：" + vehicle.getOwnerName() + "\n"
+                        + "类型：已登记外来车辆\n"
+                        + "备注：" + (vehicle.getRemark() != null ? vehicle.getRemark() : "无");
+            } else {
+                message = "车牌号：" + plateCode + "\n"
+                        + "该车辆未在白名单中登记！";
+            }
+            builder.setTitle("⚠️ 外来车辆")
+                    .setMessage(message)
+                    .setPositiveButton("确定", null);
+            AlertDialog dialog = builder.create();
+            dialog.setOnShowListener(new DialogInterface.OnShowListener() {
+                @Override
+                public void onShow(DialogInterface dialogInterface) {
+                    dialog.getWindow().getDecorView().setBackgroundColor(Color.parseColor("#CCF44336"));
+                }
+            });
+            dialog.show();
         }
     }
 }

@@ -1,6 +1,8 @@
 package com.hyperai.example.lpr3_demo;
 
 import android.app.AlertDialog;
+import android.content.Intent;
+import android.net.Uri;
 import android.os.Bundle;
 import android.text.Editable;
 import android.text.TextWatcher;
@@ -16,12 +18,19 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
+import org.apache.poi.ss.usermodel.Cell;
+import org.apache.poi.ss.usermodel.Row;
+import org.apache.poi.ss.usermodel.Sheet;
+import org.apache.poi.ss.usermodel.Workbook;
+import org.apache.poi.ss.usermodel.WorkbookFactory;
+
+import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.List;
 
 /**
  * 车辆白名单管理界面
- * 支持增删改查操作
+ * 支持增删改查 + Excel 批量导入
  */
 public class VehicleManageActivity extends AppCompatActivity {
 
@@ -29,11 +38,15 @@ public class VehicleManageActivity extends AppCompatActivity {
     private TextView tvEmpty;
     private EditText etSearch;
     private Button btnAdd;
+    private Button btnImportExcel;
 
     private VehicleDao vehicleDao;
     private VehicleAdapter adapter;
     private List<Vehicle> vehicleList = new ArrayList<>();
     private List<Vehicle> filteredList = new ArrayList<>();
+
+    /** 文件选择请求码 */
+    private static final int REQUEST_CODE_PICK_EXCEL = 100;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -48,6 +61,7 @@ public class VehicleManageActivity extends AppCompatActivity {
         tvEmpty = findViewById(R.id.tv_empty);
         etSearch = findViewById(R.id.et_search);
         btnAdd = findViewById(R.id.btn_add);
+        btnImportExcel = findViewById(R.id.btn_import_excel);
 
         // 设置 RecyclerView
         recyclerView.setLayoutManager(new LinearLayoutManager(this));
@@ -62,6 +76,23 @@ public class VehicleManageActivity extends AppCompatActivity {
             @Override
             public void onClick(View v) {
                 showVehicleEditorDialog(null);
+            }
+        });
+
+        // ===== 导入 Excel 按钮 =====
+        btnImportExcel.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                // 打开文件选择器，选择 Excel 文件
+                Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                intent.addCategory(Intent.CATEGORY_OPENABLE);
+                intent.setType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+                // 也支持 .xls 格式
+                intent.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        "application/vnd.ms-excel"
+                });
+                startActivityForResult(intent, REQUEST_CODE_PICK_EXCEL);
             }
         });
 
@@ -224,5 +255,159 @@ public class VehicleManageActivity extends AppCompatActivity {
                 })
                 .setNegativeButton("取消", null)
                 .show();
+    }
+
+    // ========================================================================
+    // ===== 文件选择回调 + Excel 批量导入功能 =====
+    // ========================================================================
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQUEST_CODE_PICK_EXCEL && resultCode == RESULT_OK && data != null) {
+            Uri uri = data.getData();
+            if (uri != null) {
+                importExcelFile(uri);
+            }
+        }
+    }
+
+    /**
+     * 解析并导入 Excel 文件
+     * Excel 格式要求：
+     *   第1行：表头（A: 车牌号, B: 车主姓名, C: 是否内部车, D: 备注）
+     *   第2行起：数据行
+     */
+    private void importExcelFile(Uri uri) {
+        try {
+            InputStream inputStream = getContentResolver().openInputStream(uri);
+            if (inputStream == null) {
+                Toast.makeText(this, "无法读取文件", Toast.LENGTH_SHORT).show();
+                return;
+            }
+
+            // 使用 POI 解析 Excel
+            Workbook workbook = WorkbookFactory.create(inputStream);
+            Sheet sheet = workbook.getSheetAt(0);
+
+            if (sheet.getPhysicalNumberOfRows() <= 1) {
+                Toast.makeText(this, "Excel 文件中没有数据行（至少需要表头+1行数据）", Toast.LENGTH_SHORT).show();
+                workbook.close();
+                inputStream.close();
+                return;
+            }
+
+            // 解析数据行（从第2行开始，第1行是表头）
+            List<Vehicle> vehiclesToInsert = new ArrayList<>();
+            int skipRows = 0;
+
+            for (int i = 1; i <= sheet.getLastRowNum(); i++) {
+                Row row = sheet.getRow(i);
+                if (row == null) continue;
+
+                // 读取各列
+                String plateNumber = getCellStringValue(row.getCell(0));
+                String ownerName = getCellStringValue(row.getCell(1));
+                boolean isInternal = getCellBooleanValue(row.getCell(2));
+                String remark = getCellStringValue(row.getCell(3));
+
+                // 车牌号不能为空
+                if (plateNumber == null || plateNumber.trim().isEmpty()) {
+                    skipRows++;
+                    continue;
+                }
+
+                plateNumber = plateNumber.trim();
+
+                // 去重检查：如果数据库中已存在该车牌，跳过
+                int existingCount = vehicleDao.countByPlate(plateNumber);
+                if (existingCount > 0) {
+                    skipRows++;
+                    continue;
+                }
+
+                vehiclesToInsert.add(new Vehicle(plateNumber, ownerName, isInternal, remark));
+            }
+
+            workbook.close();
+            inputStream.close();
+
+            // 批量插入
+            if (!vehiclesToInsert.isEmpty()) {
+                vehicleDao.insertVehiclesIgnore(vehiclesToInsert);
+            }
+
+            final int successCount = vehiclesToInsert.size();
+            final int skippedCount = skipRows;
+
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    String message = "导入完成！\n"
+                            + "成功导入：" + successCount + " 条\n"
+                            + "跳过（已存在/无效）：" + skippedCount + " 条";
+                    Toast.makeText(VehicleManageActivity.this, message, Toast.LENGTH_LONG).show();
+                    loadVehicles(); // 刷新列表
+                }
+            });
+
+        } catch (Exception e) {
+            e.printStackTrace();
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    Toast.makeText(VehicleManageActivity.this,
+                            "导入失败：" + e.getMessage(), Toast.LENGTH_LONG).show();
+                }
+            });
+        }
+    }
+
+    /**
+     * 获取单元格的字符串值
+     */
+    private String getCellStringValue(Cell cell) {
+        if (cell == null) return "";
+        switch (cell.getCellType()) {
+            case STRING:
+                return cell.getStringCellValue();
+            case NUMERIC:
+                // 如果是数字（如车牌号纯数字），转成字符串
+                double val = cell.getNumericCellValue();
+                if (val == Math.floor(val) && !Double.isInfinite(val)) {
+                    return String.valueOf((long) val);
+                }
+                return String.valueOf(val);
+            case BOOLEAN:
+                return String.valueOf(cell.getBooleanCellValue());
+            case FORMULA:
+                try {
+                    return cell.getStringCellValue();
+                } catch (Exception e) {
+                    return String.valueOf(cell.getNumericCellValue());
+                }
+            default:
+                return "";
+        }
+    }
+
+    /**
+     * 获取单元格的布尔值
+     * 支持：true/false, 是/否, 1/0, 内部/外部
+     */
+    private boolean getCellBooleanValue(Cell cell) {
+        if (cell == null) return false;
+        switch (cell.getCellType()) {
+            case BOOLEAN:
+                return cell.getBooleanCellValue();
+            case NUMERIC:
+                return cell.getNumericCellValue() == 1;
+            case STRING:
+                String val = cell.getStringCellValue().trim();
+                return val.equals("是") || val.equals("内部") || val.equals("1")
+                        || val.equalsIgnoreCase("true") || val.equalsIgnoreCase("yes");
+            default:
+                return false;
+        }
     }
 }

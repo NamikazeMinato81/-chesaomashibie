@@ -31,6 +31,14 @@ public interface VehicleDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     void insertVehicle(Vehicle vehicle);
 
+    /** ===== 批量插入，冲突时忽略（用于 Excel 去重导入） ===== */
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    void insertVehiclesIgnore(List<Vehicle> vehicles);
+
+    /** ===== 查询车牌号是否存在（用于去重计数） ===== */
+    @Query("SELECT COUNT(*) FROM vehicle WHERE plate_number = :plateNumber")
+    int countByPlate(String plateNumber);
+
     /** 更新一辆车 */
     @Update
     void updateVehicle(Vehicle vehicle);

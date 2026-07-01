@@ -25,6 +25,15 @@
             android:textStyle="bold" />
 
         <Button
+            android:id="@+id/btn_import_excel"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="导入Excel"
+            android:backgroundTint="#2196F3"
+            android:textColor="#FFFFFF"
+            android:layout_marginEnd="8dp" />
+
+        <Button
             android:id="@+id/btn_add"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"

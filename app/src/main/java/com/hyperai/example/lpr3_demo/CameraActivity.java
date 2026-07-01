@@ -24,7 +24,7 @@ import org.greenrobot.eventbus.ThreadMode;
  * @author by hs-johnny
  * Created on 2019/6/17
  *
- * 修改：集成 Room 数据库查询，识别车牌后判断是否为内部车并弹窗提示
+ * 修改：集成 Room 数据库查询 + 单次阻断机制（弹窗期间暂停扫描）
  */
 public class CameraActivity extends Activity {
 
@@ -38,6 +38,9 @@ public class CameraActivity extends Activity {
 
     /** 上次识别的车牌，用于防重复弹窗 */
     private String lastRecognizedPlate = "";
+
+    /** ===== 单次阻断锁：弹窗显示时暂停扫描 ===== */
+    private boolean isScanningPaused = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -93,6 +96,11 @@ public class CameraActivity extends Activity {
     @Subscribe(threadMode = ThreadMode.MAIN)
     public void onMessageEvent(Plate[] plates) {
 
+        // ===== 如果扫描已暂停（弹窗显示中），直接忽略本次识别结果 =====
+        if (isScanningPaused) {
+            return;
+        }
+
         String showText = "";
         for (Plate plate: plates) {
             String type = "未知车牌";
@@ -103,7 +111,7 @@ public class CameraActivity extends Activity {
             showText += pStr;
             plateTv.setText(showText);
 
-            // ===== 新增：识别到车牌后查询数据库 =====
+            // ===== 识别到车牌后查询数据库 =====
             String plateCode = plate.getCode();
             if (plateCode != null && !plateCode.isEmpty()) {
                 // 避免对同一车牌重复弹窗
@@ -141,6 +149,10 @@ public class CameraActivity extends Activity {
      * @param vehicle   数据库查询结果（null 表示未在白名单中）
      */
     private void showVehicleDialog(String plateCode, Vehicle vehicle) {
+
+        // ===== 暂停扫描，防止弹窗期间重复触发 =====
+        isScanningPaused = true;
+
         AlertDialog.Builder builder = new AlertDialog.Builder(this);
         builder.setCancelable(false);
 
@@ -156,6 +168,8 @@ public class CameraActivity extends Activity {
                         @Override
                         public void onClick(DialogInterface dialog, int which) {
                             dialog.dismiss();
+                            // ===== 关闭弹窗后恢复扫描 =====
+                            resumeScanning();
                         }
                     });
             // 创建并设置背景色为绿色
@@ -185,6 +199,8 @@ public class CameraActivity extends Activity {
                         @Override
                         public void onClick(DialogInterface dialog, int which) {
                             dialog.dismiss();
+                            // ===== 关闭弹窗后恢复扫描 =====
+                            resumeScanning();
                         }
                     });
             // 创建并设置背景色为红色
@@ -197,6 +213,14 @@ public class CameraActivity extends Activity {
             });
             dialog.show();
         }
+    }
+
+    /**
+     * ===== 恢复扫描：重置状态锁，清空上次车牌记录 =====
+     */
+    private void resumeScanning() {
+        isScanningPaused = false;
+        lastRecognizedPlate = "";
     }
 
 }
