@@ -48,13 +48,8 @@ dependencies {
     // RecyclerView for management list
     implementation 'androidx.recyclerview:recyclerview:1.2.1'
 
-    // Apache POI for Excel parsing (exclude log4j to avoid minSdk conflict)
-    implementation ('org.apache.poi:poi:5.2.3') {
-        exclude group: 'org.apache.logging.log4j'
-    }
-    implementation ('org.apache.poi:poi-ooxml:5.2.3') {
-        exclude group: 'org.apache.logging.log4j'
-    }
+    // jxl for .xls parsing (pure Java, lightweight, no security issues)
+    implementation 'net.sourceforge.jexcelapi:jxl:2.6.12'
 
     testImplementation 'junit:junit:4.+'
     androidTestImplementation 'androidx.test.ext:junit:1.1.5'

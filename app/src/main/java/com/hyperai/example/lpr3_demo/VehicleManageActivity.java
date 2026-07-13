@@ -1,11 +1,15 @@
 package com.hyperai.example.lpr3_demo;
 
 import android.app.AlertDialog;
+import android.content.ContentResolver;
 import android.content.Intent;
+import android.database.Cursor;
 import android.net.Uri;
 import android.os.Bundle;
+import android.provider.OpenableColumns;
 import android.text.Editable;
 import android.text.TextWatcher;
+import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.widget.Button;
@@ -18,19 +22,28 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
-import org.apache.poi.ss.usermodel.Cell;
-import org.apache.poi.ss.usermodel.Row;
-import org.apache.poi.ss.usermodel.Sheet;
-import org.apache.poi.ss.usermodel.Workbook;
-import org.apache.poi.ss.usermodel.WorkbookFactory;
+import org.w3c.dom.Document;
+import org.w3c.dom.Element;
+import org.w3c.dom.NodeList;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
+
+import javax.xml.parsers.DocumentBuilder;
+import javax.xml.parsers.DocumentBuilderFactory;
+
+import jxl.Cell;
+import jxl.Sheet;
+import jxl.Workbook;
 
 /**
  * 车辆白名单管理界面
- * 支持增删改查 + Excel 批量导入
+ * 支持增删改查 + Excel 批量导入（支持 .xls 和 .xlsx 双格式）
  */
 public class VehicleManageActivity extends AppCompatActivity {
 
@@ -47,6 +60,7 @@ public class VehicleManageActivity extends AppCompatActivity {
 
     /** 文件选择请求码 */
     private static final int REQUEST_CODE_PICK_EXCEL = 100;
+    private static final String TAG = "VehicleManage";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -79,19 +93,18 @@ public class VehicleManageActivity extends AppCompatActivity {
             }
         });
 
-        // ===== 导入 Excel 按钮 =====
+        // ===== 导入 Excel 按钮（支持 .xls 和 .xlsx 双格式） =====
         btnImportExcel.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                // 打开文件选择器，选择 Excel 文件
                 Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
                 intent.addCategory(Intent.CATEGORY_OPENABLE);
-                intent.setType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-                // 也支持 .xls 格式
-                intent.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{
-                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        "application/vnd.ms-excel"
-                });
+                intent.setType("*/*");
+                String[] mimeTypes = {
+                    "application/vnd.ms-excel",                           // .xls
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" // .xlsx
+                };
+                intent.putExtra(Intent.EXTRA_MIME_TYPES, mimeTypes);
                 startActivityForResult(intent, REQUEST_CODE_PICK_EXCEL);
             }
         });
@@ -195,7 +208,7 @@ public class VehicleManageActivity extends AppCompatActivity {
         }
 
         builder.setTitle(isEditMode ? "编辑车辆" : "添加车辆")
-                .setPositiveButton("保存", null) // 先 null，后面重写
+                .setPositiveButton("保存", null)
                 .setNegativeButton("取消", null);
 
         AlertDialog dialog = builder.create();
@@ -210,7 +223,6 @@ public class VehicleManageActivity extends AppCompatActivity {
                 boolean isInternal = cbIsInternal.isChecked();
                 String remark = etRemark.getText().toString().trim();
 
-                // 校验车牌号不能为空
                 if (plateNumber.isEmpty()) {
                     Toast.makeText(VehicleManageActivity.this, "请输入车牌号", Toast.LENGTH_SHORT).show();
                     return;
@@ -228,7 +240,7 @@ public class VehicleManageActivity extends AppCompatActivity {
                                 Toast.makeText(VehicleManageActivity.this,
                                         isEditMode ? "修改成功" : "添加成功", Toast.LENGTH_SHORT).show();
                                 dialog.dismiss();
-                                loadVehicles(); // 刷新列表
+                                loadVehicles();
                             }
                         });
                     }
@@ -249,7 +261,7 @@ public class VehicleManageActivity extends AppCompatActivity {
                         vehicleDao.deleteVehicle(vehicle);
                         runOnUiThread(() -> {
                             Toast.makeText(VehicleManageActivity.this, "删除成功", Toast.LENGTH_SHORT).show();
-                            loadVehicles(); // 刷新列表
+                            loadVehicles();
                         });
                     }).start();
                 })
@@ -258,7 +270,7 @@ public class VehicleManageActivity extends AppCompatActivity {
     }
 
     // ========================================================================
-    // ===== 文件选择回调 + Excel 批量导入功能 =====
+    // ===== 文件选择回调 + 双格式 Excel 导入（.xls / .xlsx） =====
     // ========================================================================
 
     @Override
@@ -273,141 +285,350 @@ public class VehicleManageActivity extends AppCompatActivity {
     }
 
     /**
-     * 解析并导入 Excel 文件
-     * Excel 格式要求：
-     *   第1行：表头（A: 车牌号, B: 车主姓名, C: 是否内部车, D: 备注）
-     *   第2行起：数据行
+     * 通过 ContentResolver 获取文件名的后缀
+     */
+    private String getFileExtension(Uri uri) {
+        String extension = "";
+        ContentResolver cr = getContentResolver();
+        Cursor cursor = cr.query(uri, null, null, null, null);
+        if (cursor != null && cursor.moveToFirst()) {
+            int nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME);
+            if (nameIndex >= 0) {
+                String fileName = cursor.getString(nameIndex);
+                if (fileName != null) {
+                    int dotIndex = fileName.lastIndexOf('.');
+                    if (dotIndex >= 0) {
+                        extension = fileName.substring(dotIndex).toLowerCase();
+                    }
+                }
+            }
+            cursor.close();
+        }
+        return extension;
+    }
+
+    /**
+     * 统一的 Excel 导入入口
+     * 在子线程中完成：打开流 → 解析 → 去重写入 → 关闭流
+     * 确保 finally 中关闭流，杜绝 Stream closed 错误
+     *
+     * 关键设计：
+     * - 先通过 getFileExtension() 获取后缀（不消耗 InputStream）
+     * - 再通过 openInputStream() 创建全新 InputStream
+     * - .xls 分支：jxl 直接读取原始 InputStream
+     * - .xlsx 分支：先将整个 .xlsx 读到 ByteArrayOutputStream，
+     *   再从 ByteArrayInputStream 创建 ZipInputStream，
+     *   这样 ZipInputStream.close() 不会影响原始 InputStream
      */
     private void importExcelFile(Uri uri) {
-        try {
-            InputStream inputStream = getContentResolver().openInputStream(uri);
-            if (inputStream == null) {
-                Toast.makeText(this, "无法读取文件", Toast.LENGTH_SHORT).show();
-                return;
-            }
-
-            // 使用 POI 解析 Excel
-            Workbook workbook = WorkbookFactory.create(inputStream);
-            Sheet sheet = workbook.getSheetAt(0);
-
-            if (sheet.getPhysicalNumberOfRows() <= 1) {
-                Toast.makeText(this, "Excel 文件中没有数据行（至少需要表头+1行数据）", Toast.LENGTH_SHORT).show();
-                workbook.close();
-                inputStream.close();
-                return;
-            }
-
-            // 解析数据行（从第2行开始，第1行是表头）
-            List<Vehicle> vehiclesToInsert = new ArrayList<>();
-            int skipRows = 0;
-
-            for (int i = 1; i <= sheet.getLastRowNum(); i++) {
-                Row row = sheet.getRow(i);
-                if (row == null) continue;
-
-                // 读取各列
-                String plateNumber = getCellStringValue(row.getCell(0));
-                String ownerName = getCellStringValue(row.getCell(1));
-                boolean isInternal = getCellBooleanValue(row.getCell(2));
-                String remark = getCellStringValue(row.getCell(3));
-
-                // 车牌号不能为空
-                if (plateNumber == null || plateNumber.trim().isEmpty()) {
-                    skipRows++;
-                    continue;
-                }
-
-                plateNumber = plateNumber.trim();
-
-                // 去重检查：如果数据库中已存在该车牌，跳过
-                int existingCount = vehicleDao.countByPlate(plateNumber);
-                if (existingCount > 0) {
-                    skipRows++;
-                    continue;
-                }
-
-                vehiclesToInsert.add(new Vehicle(plateNumber, ownerName, isInternal, remark));
-            }
-
-            workbook.close();
-            inputStream.close();
-
-            // 批量插入
-            if (!vehiclesToInsert.isEmpty()) {
-                vehicleDao.insertVehiclesIgnore(vehiclesToInsert);
-            }
-
-            final int successCount = vehiclesToInsert.size();
-            final int skippedCount = skipRows;
-
-            runOnUiThread(new Runnable() {
-                @Override
-                public void run() {
-                    String message = "导入完成！\n"
-                            + "成功导入：" + successCount + " 条\n"
-                            + "跳过（已存在/无效）：" + skippedCount + " 条";
-                    Toast.makeText(VehicleManageActivity.this, message, Toast.LENGTH_LONG).show();
-                    loadVehicles(); // 刷新列表
-                }
-            });
-
-        } catch (Exception e) {
-            e.printStackTrace();
-            runOnUiThread(new Runnable() {
-                @Override
-                public void run() {
-                    Toast.makeText(VehicleManageActivity.this,
-                            "导入失败：" + e.getMessage(), Toast.LENGTH_LONG).show();
-                }
-            });
-        }
-    }
-
-    /**
-     * 获取单元格的字符串值
-     */
-    private String getCellStringValue(Cell cell) {
-        if (cell == null) return "";
-        switch (cell.getCellType()) {
-            case STRING:
-                return cell.getStringCellValue();
-            case NUMERIC:
-                // 如果是数字（如车牌号纯数字），转成字符串
-                double val = cell.getNumericCellValue();
-                if (val == Math.floor(val) && !Double.isInfinite(val)) {
-                    return String.valueOf((long) val);
-                }
-                return String.valueOf(val);
-            case BOOLEAN:
-                return String.valueOf(cell.getBooleanCellValue());
-            case FORMULA:
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                InputStream inputStream = null;
                 try {
-                    return cell.getStringCellValue();
+                    // 获取文件后缀，判断格式（不消耗 InputStream，仅查询 ContentResolver 元数据）
+                    final String ext = getFileExtension(uri);
+                    Log.d(TAG, "导入文件后缀: " + ext);
+
+                    // 通过 ContentResolver 打开输入流（在子线程中打开，生命周期由子线程管理）
+                    inputStream = getContentResolver().openInputStream(uri);
+                    if (inputStream == null) {
+                        runOnUiThread(() -> Toast.makeText(VehicleManageActivity.this,
+                                "无法读取文件", Toast.LENGTH_SHORT).show());
+                        return;
+                    }
+
+                    // 解析结果
+                    List<Vehicle> vehiclesToInsert;
+
+                    if (".xls".equals(ext)) {
+                        // .xls 格式 → 使用 jxl 直接解析原始 InputStream
+                        Log.d(TAG, "使用 jxl 解析 .xls 文件");
+                        vehiclesToInsert = parseXls(inputStream);
+                    } else {
+                        // .xlsx 格式 → 先将整个文件读到内存，再从 ByteArrayInputStream 创建 ZipInputStream
+                        // 这样 ZipInputStream.close() 不会关闭原始 inputStream
+                        Log.d(TAG, "使用原生 Zip+XML 解析 .xlsx 文件");
+                        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                        byte[] buffer = new byte[8192];
+                        int len;
+                        while ((len = inputStream.read(buffer)) != -1) {
+                            baos.write(buffer, 0, len);
+                        }
+                        baos.close();
+                        ByteArrayInputStream bais = new ByteArrayInputStream(baos.toByteArray());
+                        vehiclesToInsert = parseXlsx(bais);
+                    }
+
+                    // 去重检查并批量插入
+                    int successCount = 0;
+                    int skipped = 0;
+                    if (vehiclesToInsert != null) {
+                        List<Vehicle> finalList = new ArrayList<>();
+                        for (Vehicle v : vehiclesToInsert) {
+                            if (v.getPlateNumber() == null || v.getPlateNumber().trim().isEmpty()) {
+                                skipped++;
+                                continue;
+                            }
+                            int existingCount = vehicleDao.countByPlate(v.getPlateNumber());
+                            if (existingCount > 0) {
+                                skipped++;
+                                continue;
+                            }
+                            finalList.add(v);
+                        }
+                        if (!finalList.isEmpty()) {
+                            vehicleDao.insertVehiclesIgnore(finalList);
+                            successCount = finalList.size();
+                        }
+                    }
+
+                    final int finalSuccess = successCount;
+                    final int finalSkipped = skipped;
+
+                    // 主线程弹出 Toast 提示
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            String message = "导入完成！\n"
+                                    + "成功导入：" + finalSuccess + " 条\n"
+                                    + "跳过（已存在/无效）：" + finalSkipped + " 条";
+                            Toast.makeText(VehicleManageActivity.this, message, Toast.LENGTH_LONG).show();
+                            loadVehicles();
+                        }
+                    });
+
                 } catch (Exception e) {
-                    return String.valueOf(cell.getNumericCellValue());
+                    Log.e(TAG, "Excel 导入失败", e);
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            Toast.makeText(VehicleManageActivity.this,
+                                    "导入失败：" + e.getMessage(), Toast.LENGTH_LONG).show();
+                        }
+                    });
+                } finally {
+                    // ★ 绝对安全：只有在子线程所有操作完成后，才在 finally 中关闭流
+                    if (inputStream != null) {
+                        try {
+                            inputStream.close();
+                            Log.d(TAG, "输入流已安全关闭");
+                        } catch (Exception e) {
+                            Log.e(TAG, "关闭输入流失败", e);
+                        }
+                    }
                 }
-            default:
-                return "";
+            }
+        }).start();
+    }
+
+    // ========================================================================
+    // ===== .xls 解析（使用 jxl 轻量库） =====
+    // ========================================================================
+
+    /**
+     * 使用 jxl 解析 .xls 文件
+     * Excel 格式：A列=车牌号, B列=车主姓名, C列=是否内部车, D列=备注
+     */
+    private List<Vehicle> parseXls(InputStream inputStream) throws Exception {
+        List<Vehicle> vehicles = new ArrayList<>();
+        Workbook workbook = Workbook.getWorkbook(inputStream);
+        Sheet sheet = workbook.getSheet(0);
+
+        int rows = sheet.getRows();
+        // 从第2行开始（第1行是表头）
+        for (int i = 1; i < rows; i++) {
+            try {
+                Cell[] row = sheet.getRow(i);
+                if (row.length < 1) continue;
+
+                String plateNumber = getCellTrimmed(row, 0);
+                String ownerName = getCellTrimmed(row, 1);
+                String internalStr = getCellTrimmed(row, 2);
+                String remark = getCellTrimmed(row, 3);
+
+                if (plateNumber.isEmpty()) continue;
+
+                boolean isInternal = false;
+                if (!internalStr.isEmpty()) {
+                    isInternal = internalStr.equals("是") || internalStr.equals("内部")
+                            || internalStr.equals("1") || internalStr.equalsIgnoreCase("true")
+                            || internalStr.equalsIgnoreCase("yes");
+                }
+
+                vehicles.add(new Vehicle(plateNumber, ownerName, isInternal, remark));
+
+            } catch (Exception e) {
+                Log.e(TAG, "解析 .xls 第 " + (i + 1) + " 行失败: " + e.getMessage(), e);
+            }
         }
+
+        workbook.close();
+        return vehicles;
     }
 
     /**
-     * 获取单元格的布尔值
-     * 支持：true/false, 是/否, 1/0, 内部/外部
+     * 统一清理单元格字符串：去除首尾空格 + 移除所有换行符
+     * 确保存入数据库的车牌号是绝对干净的
      */
-    private boolean getCellBooleanValue(Cell cell) {
-        if (cell == null) return false;
-        switch (cell.getCellType()) {
-            case BOOLEAN:
-                return cell.getBooleanCellValue();
-            case NUMERIC:
-                return cell.getNumericCellValue() == 1;
-            case STRING:
-                String val = cell.getStringCellValue().trim();
-                return val.equals("是") || val.equals("内部") || val.equals("1")
-                        || val.equalsIgnoreCase("true") || val.equalsIgnoreCase("yes");
-            default:
-                return false;
+    private String cleanCell(String raw) {
+        if (raw == null) return "";
+        return raw.trim().replace("\n", "").replace("\r", "");
+    }
+
+    private String getCellTrimmed(Cell[] row, int index) {
+        if (row == null || index >= row.length || row[index] == null) return "";
+        String val = row[index].getContents();
+        return cleanCell(val);
+    }
+
+    // ========================================================================
+    // ===== .xlsx 解析（使用 Android 原生 ZipInputStream + XML 解析器） =====
+    // ========================================================================
+
+    /**
+     * 使用 Android 原生 ZipInputStream + XML 解析器手动解析 .xlsx 文件
+     * .xlsx 本质是 ZIP 包，包含 xl/sharedStrings.xml（字符串表）和 xl/worksheets/sheet1.xml（数据）
+     */
+    private List<Vehicle> parseXlsx(InputStream inputStream) throws Exception {
+        List<String> sharedStrings = new ArrayList<>();
+        List<String[]> sheetData = new ArrayList<>();
+
+        ZipInputStream zis = new ZipInputStream(inputStream);
+        ZipEntry entry;
+
+        while ((entry = zis.getNextEntry()) != null) {
+            String entryName = entry.getName();
+
+            if ("xl/sharedStrings.xml".equals(entryName)) {
+                sharedStrings = parseSharedStrings(zis);
+            } else if ("xl/worksheets/sheet1.xml".equals(entryName)) {
+                sheetData = parseSheetData(zis);
+            }
+
+            zis.closeEntry();
         }
+        zis.close();
+
+        // 解析数据行（第1行是表头，从第2行开始）
+        List<Vehicle> vehicles = new ArrayList<>();
+        for (int i = 1; i < sheetData.size(); i++) {
+            try {
+                String[] row = sheetData.get(i);
+                if (row.length < 1) continue;
+
+                String plateNumber = cleanCell(getCellValue(row, 0, sharedStrings));
+                String ownerName = cleanCell(getCellValue(row, 1, sharedStrings));
+                String internalStr = cleanCell(getCellValue(row, 2, sharedStrings));
+                String remark = cleanCell(getCellValue(row, 3, sharedStrings));
+
+                if (plateNumber.isEmpty()) continue;
+
+                boolean isInternal = false;
+                if (!internalStr.isEmpty()) {
+                    isInternal = internalStr.equals("是") || internalStr.equals("内部")
+                            || internalStr.equals("1") || internalStr.equalsIgnoreCase("true")
+                            || internalStr.equalsIgnoreCase("yes");
+                }
+
+                vehicles.add(new Vehicle(plateNumber, ownerName, isInternal, remark));
+
+            } catch (Exception e) {
+                Log.e(TAG, "解析 .xlsx 第 " + (i + 1) + " 行失败: " + e.getMessage(), e);
+            }
+        }
+
+        return vehicles;
+    }
+
+    private List<String> parseSharedStrings(InputStream inputStream) throws Exception {
+        List<String> strings = new ArrayList<>();
+        DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+        DocumentBuilder builder = factory.newDocumentBuilder();
+        Document doc = builder.parse(inputStream);
+        NodeList siNodes = doc.getElementsByTagName("si");
+        for (int i = 0; i < siNodes.getLength(); i++) {
+            Element si = (Element) siNodes.item(i);
+            NodeList tNodes = si.getElementsByTagName("t");
+            StringBuilder sb = new StringBuilder();
+            for (int j = 0; j < tNodes.getLength(); j++) {
+                sb.append(tNodes.item(j).getTextContent());
+            }
+            strings.add(sb.toString());
+        }
+        return strings;
+    }
+
+    private List<String[]> parseSheetData(InputStream inputStream) throws Exception {
+        List<String[]> rows = new ArrayList<>();
+        DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+        DocumentBuilder builder = factory.newDocumentBuilder();
+        Document doc = builder.parse(inputStream);
+        NodeList rowNodes = doc.getElementsByTagName("row");
+        for (int i = 0; i < rowNodes.getLength(); i++) {
+            Element rowElement = (Element) rowNodes.item(i);
+            NodeList cellNodes = rowElement.getElementsByTagName("c");
+            int maxCol = 0;
+            for (int j = 0; j < cellNodes.getLength(); j++) {
+                Element cell = (Element) cellNodes.item(j);
+                String ref = cell.getAttribute("r");
+                int colIndex = columnRefToIndex(ref);
+                if (colIndex > maxCol) maxCol = colIndex;
+            }
+            String[] rowData = new String[maxCol + 1];
+            for (int j = 0; j < cellNodes.getLength(); j++) {
+                Element cell = (Element) cellNodes.item(j);
+                String ref = cell.getAttribute("r");
+                int colIndex = columnRefToIndex(ref);
+                String type = cell.getAttribute("t");
+                String value = "";
+                NodeList vNodes = cell.getElementsByTagName("v");
+                if (vNodes.getLength() > 0) {
+                    value = vNodes.item(0).getTextContent();
+                }
+                if ("s".equals(type)) {
+                    rowData[colIndex] = "___SI___" + value;
+                } else {
+                    rowData[colIndex] = value;
+                }
+            }
+            rows.add(rowData);
+        }
+        return rows;
+    }
+
+    private int columnRefToIndex(String ref) {
+        if (ref == null || ref.isEmpty()) return 0;
+        StringBuilder colLetters = new StringBuilder();
+        for (int i = 0; i < ref.length(); i++) {
+            char c = ref.charAt(i);
+            if (Character.isLetter(c)) {
+                colLetters.append(c);
+            } else {
+                break;
+            }
+        }
+        String col = colLetters.toString().toUpperCase();
+        int index = 0;
+        for (int i = 0; i < col.length(); i++) {
+            index = index * 26 + (col.charAt(i) - 'A' + 1);
+        }
+        return index - 1;
+    }
+
+    private String getCellValue(String[] rowData, int colIndex, List<String> sharedStrings) {
+        if (rowData == null || colIndex >= rowData.length) return "";
+        String raw = rowData[colIndex];
+        if (raw == null) return "";
+        if (raw.startsWith("___SI___")) {
+            try {
+                int siIndex = Integer.parseInt(raw.substring(8));
+                if (siIndex >= 0 && siIndex < sharedStrings.size()) {
+                    return sharedStrings.get(siIndex);
+                }
+            } catch (NumberFormatException ignored) {}
+            return "";
+        }
+        return raw;
     }
 }
