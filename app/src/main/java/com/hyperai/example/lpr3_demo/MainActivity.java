@@ -193,8 +193,10 @@ public class MainActivity extends AppCompatActivity {
 
             for (Plate plate: plates) {
                 String type = "未知车牌";
-                if (plate.getType() != HyperLPR3.PLATE_TYPE_UNKNOWN) {
-                    type = HyperLPR3.PLATE_TYPE_MAPS[plate.getType()];
+                int t = plate.getType();
+                if (t != HyperLPR3.PLATE_TYPE_UNKNOWN
+                        && t >= 0 && t < HyperLPR3.PLATE_TYPE_MAPS.length) {
+                    type = HyperLPR3.PLATE_TYPE_MAPS[t];
                 }
                 String pStr = "[" + type + "]" + plate.getCode() + "\n";
                 showText += pStr;

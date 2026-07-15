@@ -36,11 +36,14 @@ public class CameraActivity extends Activity {
     /** 数据库访问对象 */
     private VehicleDao vehicleDao;
 
-    /** 上次识别的车牌，用于防重复弹窗 */
-    private String lastRecognizedPlate = "";
-
-    /** ===== 单次阻断锁：弹窗显示时暂停扫描 ===== */
-    private boolean isScanningPaused = false;
+    /** 当前已处理、需抑制重复弹窗的车牌（同一车牌停留画面期间不再重复弹出） */
+    private String suppressedPlate = "";
+    /** 是否已有结果弹窗在显示（显示期间忽略后续识别事件，避免弹窗堆叠） */
+    private boolean dialogShowing = false;
+    /** 连续空帧计数，用于判断车牌是否已移出画面 */
+    private int absentFrames = 0;
+    /** 连续约 5 帧（~0.15s）无车牌即认为已离开，解除抑制 */
+    private static final int ABSENT_THRESHOLD = 5;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -95,32 +98,51 @@ public class CameraActivity extends Activity {
     @SuppressLint("SetTextI18n")
     @Subscribe(threadMode = ThreadMode.MAIN)
     public void onMessageEvent(Plate[] plates) {
+        boolean hasPlate = (plates != null && plates.length > 0);
 
-        // ===== 如果扫描已暂停（弹窗显示中），直接忽略本次识别结果 =====
-        if (isScanningPaused) {
+        // 没有识别到车牌：累计空帧，达到阈值则解除对上一车牌的抑制（视为已移出画面）
+        if (!hasPlate) {
+            absentFrames++;
+            if (absentFrames >= ABSENT_THRESHOLD) {
+                suppressedPlate = "";
+            }
+            return;
+        }
+        absentFrames = 0;
+
+        // 更新底部识别文本（取所有非空车牌），并取首个非空车牌作为本次结果
+        StringBuilder showText = new StringBuilder();
+        String bestCode = null;
+        for (Plate plate : plates) {
+            String code = plate.getCode();
+            if (code == null) code = "";
+            String type = "未知车牌";
+            int t = plate.getType();
+            if (t != HyperLPR3.PLATE_TYPE_UNKNOWN
+                    && t >= 0 && t < HyperLPR3.PLATE_TYPE_MAPS.length) {
+                type = HyperLPR3.PLATE_TYPE_MAPS[t];
+            }
+            showText.append("[").append(type).append("]").append(code).append("\n");
+            if (bestCode == null && !code.isEmpty()) {
+                bestCode = code;
+            }
+        }
+        plateTv.setText(showText.toString());
+
+        if (bestCode == null) return;
+
+        // 统一标准化，与导入存储保持一致，避免空格导致查不到
+        String normalized = PlateUtils.normalizePlate(bestCode);
+        if (normalized.isEmpty()) return;
+
+        // 已有弹窗显示中，或同一车牌仍在画面内 -> 不重复弹窗
+        if (dialogShowing || normalized.equals(suppressedPlate)) {
             return;
         }
 
-        String showText = "";
-        for (Plate plate: plates) {
-            String type = "未知车牌";
-            if (plate.getType() != HyperLPR3.PLATE_TYPE_UNKNOWN) {
-                type = HyperLPR3.PLATE_TYPE_MAPS[plate.getType()];
-            }
-            String pStr = "[" + type + "]" + plate.getCode() + "\n";
-            showText += pStr;
-            plateTv.setText(showText);
-
-            // ===== 识别到车牌后查询数据库 =====
-            String plateCode = plate.getCode();
-            if (plateCode != null && !plateCode.isEmpty()) {
-                // 避免对同一车牌重复弹窗
-                if (!plateCode.equals(lastRecognizedPlate)) {
-                    lastRecognizedPlate = plateCode;
-                    queryVehicleAndShowDialog(plateCode);
-                }
-            }
-        }
+        suppressedPlate = normalized;
+        dialogShowing = true;
+        queryVehicleAndShowDialog(normalized);
     }
 
     /**
@@ -149,10 +171,6 @@ public class CameraActivity extends Activity {
      * @param vehicle   数据库查询结果（null 表示未在白名单中）
      */
     private void showVehicleDialog(String plateCode, Vehicle vehicle) {
-
-        // ===== 暂停扫描，防止弹窗期间重复触发 =====
-        isScanningPaused = true;
-
         AlertDialog.Builder builder = new AlertDialog.Builder(this);
         builder.setCancelable(false);
 
@@ -168,8 +186,7 @@ public class CameraActivity extends Activity {
                         @Override
                         public void onClick(DialogInterface dialog, int which) {
                             dialog.dismiss();
-                            // ===== 关闭弹窗后恢复扫描 =====
-                            resumeScanning();
+                            dialogShowing = false;
                         }
                     });
             // 创建并设置背景色为绿色
@@ -199,8 +216,7 @@ public class CameraActivity extends Activity {
                         @Override
                         public void onClick(DialogInterface dialog, int which) {
                             dialog.dismiss();
-                            // ===== 关闭弹窗后恢复扫描 =====
-                            resumeScanning();
+                            dialogShowing = false;
                         }
                     });
             // 创建并设置背景色为红色
@@ -213,14 +229,6 @@ public class CameraActivity extends Activity {
             });
             dialog.show();
         }
-    }
-
-    /**
-     * ===== 恢复扫描：重置状态锁，清空上次车牌记录 =====
-     */
-    private void resumeScanning() {
-        isScanningPaused = false;
-        lastRecognizedPlate = "";
     }
 
 }
